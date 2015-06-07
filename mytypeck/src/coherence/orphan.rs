@@ -48,10 +48,9 @@ impl<'cx, 'tcx> OrphanChecker<'cx, 'tcx> {
         match lang_def_id {
             Some(lang_def_id) if lang_def_id == impl_def_id => { /* OK */ },
             _ => {
-                self.tcx.sess.span_err(
-                    span,
-                    &format!("only a single inherent implementation marked with `#[lang = \"{}\"]` \
-                              is allowed for the `{}` primitive", lang, ty));
+                span_err!(self.tcx.sess, span, E0390,
+                          "only a single inherent implementation marked with `#[lang = \"{}\"]` \
+                           is allowed for the `{}` primitive", lang, ty);
             }
         }
     }
@@ -316,10 +315,15 @@ impl<'cx, 'tcx> OrphanChecker<'cx, 'tcx> {
                     }
                 }
 
-                // Disallow *all* explicit impls of `Sized` for now.
+                // Disallow *all* explicit impls of `Sized` and `Unsize` for now.
                 if Some(trait_def_id) == self.tcx.lang_items.sized_trait() {
                     span_err!(self.tcx.sess, item.span, E0322,
                               "explicit impls for the `Sized` trait are not permitted");
+                    return;
+                }
+                if Some(trait_def_id) == self.tcx.lang_items.unsize_trait() {
+                    span_err!(self.tcx.sess, item.span, E0328,
+                              "explicit impls for the `Unsize` trait are not permitted");
                     return;
                 }
             }

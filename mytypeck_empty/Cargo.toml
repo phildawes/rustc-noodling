@@ -1,0 +1,4 @@
+[package]
+name = "mytypeck"
+version = "0.0.1"
+authors = ["Phil Dawes <pdawes@drw.com>"]

@@ -9,7 +9,7 @@
 // except according to those terms.
 
 use astconv::AstConv;
-use check::{FnCtxt, Inherited, blank_fn_ctxt, vtable, regionck};
+use check::{FnCtxt, Inherited, blank_fn_ctxt, regionck};
 use constrained_type_params::{identify_constrained_type_params, Parameter};
 use CrateCtxt;
 use middle::region;
@@ -81,7 +81,8 @@ impl<'ccx, 'tcx> CheckTypeWellFormedVisitor<'ccx, 'tcx> {
                 self.check_impl(item);
             }
             ast::ItemImpl(_, ast::ImplPolarity::Negative, _, Some(_), _, _) => {
-                let trait_ref = ty::impl_id_to_trait_ref(ccx.tcx, item.id);
+                let trait_ref = ty::impl_trait_ref(ccx.tcx,
+                                                   local_def(item.id)).unwrap();
                 ty::populate_implementations_for_trait_if_necessary(ccx.tcx, trait_ref.def_id);
                 match ccx.tcx.lang_items.to_builtin_kind(trait_ref.def_id) {
                     Some(ty::BoundSend) | Some(ty::BoundSync) => {}
@@ -123,10 +124,9 @@ impl<'ccx, 'tcx> CheckTypeWellFormedVisitor<'ccx, 'tcx> {
                 reject_non_type_param_bounds(ccx.tcx, item.span, &trait_predicates);
                 if ty::trait_has_default_impl(ccx.tcx, local_def(item.id)) {
                     if !items.is_empty() {
-                        ccx.tcx.sess.span_err(
-                            item.span,
-                            "traits with default impls (`e.g. unsafe impl Trait for ..`) must \
-                            have no methods or associated items")
+                        span_err!(ccx.tcx.sess, item.span, E0380,
+                                  "traits with default impls (`e.g. unsafe impl \
+                                  Trait for ..`) must have no methods or associated items")
                     }
                 }
             }
@@ -151,7 +151,7 @@ impl<'ccx, 'tcx> CheckTypeWellFormedVisitor<'ccx, 'tcx> {
         let inh = Inherited::new(ccx.tcx, param_env);
         let fcx = blank_fn_ctxt(ccx, &inh, ty::FnConverging(type_scheme.ty), item.id);
         f(self, &fcx);
-        vtable::select_all_fcx_obligations_or_error(&fcx);
+        fcx.select_all_obligations_or_error();
         regionck::regionck_item(&fcx, item);
     }
 
@@ -252,7 +252,7 @@ impl<'ccx, 'tcx> CheckTypeWellFormedVisitor<'ccx, 'tcx> {
             // trait reference. Instead, this is done at the impl site.
             // Arguably this is wrong and we should treat the trait-reference
             // the same way as we treat the self-type.
-            bounds_checker.check_trait_ref(&*trait_ref);
+            bounds_checker.check_trait_ref(&trait_ref);
 
             let cause =
                 traits::ObligationCause::new(
@@ -352,10 +352,8 @@ impl<'ccx, 'tcx> CheckTypeWellFormedVisitor<'ccx, 'tcx> {
                          span: Span,
                          param_name: ast::Name)
     {
-        self.tcx().sess.span_err(
-            span,
-            &format!("parameter `{}` is never used",
-                     param_name.user_string(self.tcx())));
+        span_err!(self.tcx().sess, span, E0392,
+            "parameter `{}` is never used", param_name.user_string(self.tcx()));
 
         let suggested_marker_id = self.tcx().lang_items.phantom_data();
         match suggested_marker_id {

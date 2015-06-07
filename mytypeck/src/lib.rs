@@ -70,19 +70,18 @@ This API is completely unstable and subject to change.
 #![crate_type = "dylib"]
 #![crate_type = "rlib"]
 #![doc(html_logo_url = "http://www.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
-      html_favicon_url = "http://www.rust-lang.org/favicon.ico",
+      html_favicon_url = "https://doc.rust-lang.org/favicon.ico",
       html_root_url = "http://doc.rust-lang.org/nightly/")]
 
 #![allow(non_camel_case_types)]
 
 #![feature(box_patterns)]
 #![feature(box_syntax)]
-#![feature(collections)]
+#![feature(collections, collections_drain)]
 #![feature(core)]
 #![feature(quote)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
-#![feature(unsafe_destructor)]
 #![feature(staged_api)]
 
 #[macro_use] extern crate log;
@@ -216,7 +215,7 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
             match tcx.map.find(main_id) {
                 Some(ast_map::NodeItem(it)) => {
                     match it.node {
-                        ast::ItemFn(_, _, _, ref ps, _)
+                        ast::ItemFn(_, _, _, _, ref ps, _)
                         if ps.is_parameterized() => {
                             span_err!(ccx.tcx.sess, main_span, E0131,
                                       "main function is not allowed to have type parameters");
@@ -263,7 +262,7 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
             match tcx.map.find(start_id) {
                 Some(ast_map::NodeItem(it)) => {
                     match it.node {
-                        ast::ItemFn(_,_,_,ref ps,_)
+                        ast::ItemFn(_,_,_,_,ref ps,_)
                         if ps.is_parameterized() => {
                             span_err!(tcx.sess, start_span, E0132,
                                       "start function is not allowed to have type parameters");
@@ -344,3 +343,8 @@ pub fn check_crate(tcx: &ty::ctxt, trait_map: ty::TraitMap) {
     check_for_entry_fn(&ccx);
     tcx.sess.abort_if_errors();
 }
+
+#[cfg(stage0)]
+__build_diagnostic_array! { DIAGNOSTICS }
+#[cfg(not(stage0))]
+__build_diagnostic_array! { librustc_typeck, DIAGNOSTICS }

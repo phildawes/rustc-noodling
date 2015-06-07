@@ -1,0 +1,40 @@
+diff -ru /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs mytypeck/src/coherence/mod.rs
+--- /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs	2015-05-27 07:33:21.127222930 +0100
++++ mytypeck/src/coherence/mod.rs	2015-05-27 13:41:34.569159485 +0100
+@@ -88,10 +88,10 @@
+     }
+ }
+ 
+-struct CoherenceChecker<'a, 'tcx: 'a> {
+-    crate_context: &'a CrateCtxt<'a, 'tcx>,
+-    inference_context: InferCtxt<'a, 'tcx>,
+-    inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<ast::DefId>>>>>,
++pub struct CoherenceChecker<'a, 'tcx: 'a> {
++    pub crate_context: &'a CrateCtxt<'a, 'tcx>,
++    pub inference_context: InferCtxt<'a, 'tcx>,
++    pub inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<ast::DefId>>>>>,
+ }
+ 
+ struct CoherenceCheckVisitor<'a, 'tcx: 'a> {
+@@ -109,7 +109,7 @@
+ }
+ 
+ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
+-    fn check(&self, krate: &Crate) {
++    pub fn check(&self, krate: &Crate) {
+         // Check implementations and traits. This populates the tables
+         // containing the inherent methods and extension methods. It also
+         // builds up the trait inheritance table.
+Only in mytypeck/src: #lib.rs#
+diff -ru /usr/local/src/rust/src/librustc_typeck/lib.rs mytypeck/src/lib.rs
+--- /usr/local/src/rust/src/librustc_typeck/lib.rs	2015-05-27 07:33:21.127222930 +0100
++++ mytypeck/src/lib.rs	2015-05-27 13:42:25.741160019 +0100
+@@ -64,7 +64,7 @@
+ */
+ // Do not remove on snapshot creation. Needed for bootstrap. (Issue #22364)
+ #![cfg_attr(stage0, feature(custom_attribute))]
+-#![crate_name = "rustc_typeck"]
++#![crate_name = "mytypeck"]
+ #![unstable(feature = "rustc_private")]
+ #![staged_api]
+ #![crate_type = "dylib"]
