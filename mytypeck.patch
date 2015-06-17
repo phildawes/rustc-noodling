@@ -1,3 +1,17 @@
+diff -ru /usr/local/src/rust/src/librustc_typeck/check/mod.rs mytypeck/src/check/mod.rs
+--- /usr/local/src/rust/src/librustc_typeck/check/mod.rs	2015-05-27 07:33:21.127222930 +0100
++++ mytypeck/src/check/mod.rs	2015-06-09 21:42:54.015063563 +0100
+@@ -435,8 +435,8 @@
+     Inherited::new(ccx.tcx, param_env)
+ }
+ 
+-struct CheckItemTypesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
+-struct CheckItemBodiesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
++pub struct CheckItemTypesVisitor<'a, 'tcx: 'a> { pub ccx: &'a CrateCtxt<'a, 'tcx> }
++pub struct CheckItemBodiesVisitor<'a, 'tcx: 'a> { pub ccx: &'a CrateCtxt<'a, 'tcx> }
+ 
+ impl<'a, 'tcx> Visitor<'tcx> for CheckItemTypesVisitor<'a, 'tcx> {
+     fn visit_item(&mut self, i: &'tcx ast::Item) {
 diff -ru /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs mytypeck/src/coherence/mod.rs
 --- /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs	2015-05-27 07:33:21.127222930 +0100
 +++ mytypeck/src/coherence/mod.rs	2015-05-27 13:41:34.569159485 +0100

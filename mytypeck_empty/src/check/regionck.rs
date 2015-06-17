@@ -254,17 +254,17 @@ impl<'a, 'tcx, 'v> Visitor<'v> for Rcx<'a, 'tcx> {
                 b: &'v ast::Block, span: Span, id: ast::NodeId) {
     }
 
-    fn visit_item(&mut self, i: &ast::Item) { visit_item(self, i); }
+    fn visit_item(&mut self, i: &ast::Item) {}
 
-    fn visit_expr(&mut self, ex: &ast::Expr) { visit_expr(self, ex); }
+    fn visit_expr(&mut self, ex: &ast::Expr) {}
 
     //visit_pat: visit_pat, // (..) see above
 
-    fn visit_arm(&mut self, a: &ast::Arm) { visit_arm(self, a); }
+    fn visit_arm(&mut self, a: &ast::Arm) {}
 
-    fn visit_local(&mut self, l: &ast::Local) { visit_local(self, l); }
+    fn visit_local(&mut self, l: &ast::Local) {}
 
-    fn visit_block(&mut self, b: &ast::Block) { visit_block(self, b); }
+    fn visit_block(&mut self, b: &ast::Block) {}
 }
 
 fn visit_item(_rcx: &mut Rcx, _item: &ast::Item) {
