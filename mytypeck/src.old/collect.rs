@@ -76,10 +76,9 @@ use middle::const_eval::{self, ConstVal};
 use middle::const_eval::EvalHint::UncheckedExprHint;
 use middle::subst::{Substs, FnSpace, ParamSpace, SelfSpace, TypeSpace, VecPerParamSpace};
 use middle::ty::{ToPredicate, ImplContainer, ImplOrTraitItemContainer, TraitContainer};
-use middle::ty::{self, RegionEscape, ToPolyTraitRef, Ty, TypeScheme};
+use middle::ty::{self, RegionEscape, ToPolyTraitRef, Ty, TypeScheme, IntTypeExt};
 use middle::ty::{VariantKind};
-use middle::ty::fold::{TypeFolder, TypeFoldable};
-use middle::ty::util::IntTypeExt;
+use middle::ty_fold::{self, TypeFolder, TypeFoldable};
 use middle::infer;
 use rscope::*;
 use rustc::front::map as hir_map;
@@ -93,12 +92,12 @@ use std::rc::Rc;
 
 use syntax::abi;
 use syntax::ast;
-use syntax::attr;
 use syntax::codemap::Span;
 use syntax::parse::token::special_idents;
 use syntax::ptr::P;
 use rustc_front::hir;
 use rustc_front::visit;
+use rustc_front::attr;
 use rustc_front::print::pprust;
 
 ///////////////////////////////////////////////////////////////////////////
@@ -577,7 +576,7 @@ fn convert_method<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                             container: ImplOrTraitItemContainer,
                             sig: &hir::MethodSig,
                             id: ast::NodeId,
-                            name: ast::Name,
+                            ident: ast::Ident,
                             vis: hir::Visibility,
                             untransformed_rcvr_ty: Ty<'tcx>,
                             rcvr_ty_generics: &ty::Generics<'tcx>,
@@ -592,7 +591,7 @@ fn convert_method<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                               sig, untransformed_rcvr_ty);
 
     let def_id = DefId::local(id);
-    let ty_method = ty::Method::new(name,
+    let ty_method = ty::Method::new(ident.name,
                                     ty_generics,
                                     ty_generic_predicates,
                                     fty,
@@ -605,7 +604,7 @@ fn convert_method<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
     let fty = ccx.tcx.mk_fn(Some(def_id),
                             ccx.tcx.mk_bare_fn(ty_method.fty.clone()));
     debug!("method {} (id {}) has type {:?}",
-            name, id, fty);
+            ident, id, fty);
     ccx.tcx.register_item_type(def_id, TypeScheme {
         generics: ty_method.generics.clone(),
         ty: fty
@@ -643,7 +642,7 @@ fn convert_field<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
 
 fn convert_associated_const<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                                       container: ImplOrTraitItemContainer,
-                                      name: ast::Name,
+                                      ident: ast::Ident,
                                       id: ast::NodeId,
                                       vis: hir::Visibility,
                                       ty: ty::Ty<'tcx>,
@@ -656,7 +655,7 @@ fn convert_associated_const<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
     let default_id = default.map(|expr| DefId::local(expr.id));
 
     let associated_const = Rc::new(ty::AssociatedConst {
-        name: name,
+        name: ident.name,
         vis: vis,
         def_id: DefId::local(id),
         container: container,
@@ -669,13 +668,13 @@ fn convert_associated_const<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
 
 fn convert_associated_type<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                                      container: ImplOrTraitItemContainer,
-                                     name: ast::Name,
+                                     ident: ast::Ident,
                                      id: ast::NodeId,
                                      vis: hir::Visibility,
                                      ty: Option<Ty<'tcx>>)
 {
     let associated_type = Rc::new(ty::AssociatedType {
-        name: name,
+        name: ident.name,
         vis: vis,
         ty: ty,
         def_id: DefId::local(id),
@@ -691,7 +690,7 @@ fn convert_methods<'a,'tcx,'i,I>(ccx: &CrateCtxt<'a, 'tcx>,
                                  untransformed_rcvr_ty: Ty<'tcx>,
                                  rcvr_ty_generics: &ty::Generics<'tcx>,
                                  rcvr_ty_predicates: &ty::GenericPredicates<'tcx>)
-    where I: Iterator<Item=(&'i hir::MethodSig, ast::NodeId, ast::Name, hir::Visibility, Span)>
+    where I: Iterator<Item=(&'i hir::MethodSig, ast::NodeId, ast::Ident, hir::Visibility, Span)>
 {
     debug!("convert_methods(untransformed_rcvr_ty={:?}, rcvr_ty_generics={:?}, \
                             rcvr_ty_predicates={:?})",
@@ -743,7 +742,7 @@ fn ensure_no_ty_param_bounds(ccx: &CrateCtxt,
 
 fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
     let tcx = ccx.tcx;
-    debug!("convert: item {} with id {}", it.name, it.id);
+    debug!("convert: item {} with id {}", it.ident, it.id);
     match it.node {
         // These don't define types.
         hir::ItemExternCrate(_) | hir::ItemUse(_) |
@@ -823,7 +822,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                     hir::TypeImplItem(_) => &mut seen_type_items,
                     _                    => &mut seen_value_items,
                 };
-                if !seen_items.insert(impl_item.name) {
+                if !seen_items.insert(impl_item.ident.name) {
                     let desc = match impl_item.node {
                         hir::ConstImplItem(_, _) => "associated constant",
                         hir::TypeImplItem(_) => "associated type",
@@ -846,7 +845,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                                                ty: ty,
                                            });
                     convert_associated_const(ccx, ImplContainer(DefId::local(it.id)),
-                                             impl_item.name, impl_item.id,
+                                             impl_item.ident, impl_item.id,
                                              impl_item.vis.inherit_from(parent_visibility),
                                              ty, Some(&*expr));
                 }
@@ -863,7 +862,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                     let typ = ccx.icx(&ty_predicates).to_ty(&ExplicitRscope, ty);
 
                     convert_associated_type(ccx, ImplContainer(DefId::local(it.id)),
-                                            impl_item.name, impl_item.id, impl_item.vis,
+                                            impl_item.ident, impl_item.id, impl_item.vis,
                                             Some(typ));
                 }
             }
@@ -875,7 +874,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                     // { fn foo(); }` is public, but private in `impl { fn
                     // foo(); }`).
                     let method_vis = ii.vis.inherit_from(parent_visibility);
-                    Some((sig, ii.id, ii.name, method_vis, ii.span))
+                    Some((sig, ii.id, ii.ident, method_vis, ii.span))
                 } else {
                     None
                 }
@@ -925,7 +924,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                                                    ty: ty,
                                                });
                         convert_associated_const(ccx, TraitContainer(DefId::local(it.id)),
-                                                 trait_item.name, trait_item.id,
+                                                 trait_item.ident, trait_item.id,
                                                  hir::Public, ty, default.as_ref().map(|d| &**d));
                     }
                     _ => {}
@@ -941,7 +940,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                         });
 
                         convert_associated_type(ccx, TraitContainer(DefId::local(it.id)),
-                                                trait_item.name, trait_item.id, hir::Public,
+                                                trait_item.ident, trait_item.id, hir::Public,
                                                 typ);
                     }
                     _ => {}
@@ -953,7 +952,7 @@ fn convert_item(ccx: &CrateCtxt, it: &hir::Item) {
                     hir::MethodTraitItem(ref sig, _) => sig,
                     _ => return None,
                 };
-                Some((sig, ti.id, ti.name, hir::Inherited, ti.span))
+                Some((sig, ti.id, ti.ident, hir::Inherited, ti.span))
             });
 
             // Run convert_methods on the trait methods.
@@ -1099,18 +1098,18 @@ fn convert_struct_variant<'tcx>(tcx: &ty::ctxt<'tcx>,
     let fields = def.fields.iter().map(|f| {
         let fid = DefId::local(f.node.id);
         match f.node.kind {
-            hir::NamedField(name, vis) => {
-                let dup_span = seen_fields.get(&name).cloned();
+            hir::NamedField(ident, vis) => {
+                let dup_span = seen_fields.get(&ident.name).cloned();
                 if let Some(prev_span) = dup_span {
                     span_err!(tcx.sess, f.span, E0124,
                               "field `{}` is already declared",
-                              name);
+                              ident.name);
                     span_note!(tcx.sess, prev_span, "previously declared here");
                 } else {
-                    seen_fields.insert(name, f.span);
+                    seen_fields.insert(ident.name, f.span);
                 }
 
-                ty::FieldDefData::new(fid, name, vis)
+                ty::FieldDefData::new(fid, ident.name, vis)
             },
             hir::UnnamedField(vis) => {
                 ty::FieldDefData::new(fid, special_idents::unnamed_field.name, vis)
@@ -1135,7 +1134,7 @@ fn convert_struct_def<'tcx>(tcx: &ty::ctxt<'tcx>,
     tcx.intern_adt_def(
         did,
         ty::AdtKind::Struct,
-        vec![convert_struct_variant(tcx, did, it.name, 0, def)]
+        vec![convert_struct_variant(tcx, did, it.ident.name, 0, def)]
     )
 }
 
@@ -1195,7 +1194,7 @@ fn convert_enum_def<'tcx>(tcx: &ty::ctxt<'tcx>,
         if let Some(prev_disr_val) = prev_disr_val {
             let result = repr_type.disr_incr(prev_disr_val);
             if let None = result {
-                report_discrim_overflow(tcx, v.span, &v.node.name.as_str(),
+                report_discrim_overflow(tcx, v.span, &v.node.name.name.as_str(),
                                              repr_type, prev_disr_val);
             }
             result
@@ -1209,7 +1208,7 @@ fn convert_enum_def<'tcx>(tcx: &ty::ctxt<'tcx>,
                                   -> ty::VariantDefData<'tcx, 'tcx>
     {
         let did = DefId::local(v.node.id);
-        let name = v.node.name;
+        let name = v.node.name.name;
         match v.node.kind {
             hir::TupleVariantKind(ref va) => {
                 ty::VariantDefData {
@@ -1369,7 +1368,7 @@ fn trait_def_of_item<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
 
     let associated_type_names: Vec<_> = items.iter().filter_map(|trait_item| {
         match trait_item.node {
-            hir::TypeTraitItem(..) => Some(trait_item.name),
+            hir::TypeTraitItem(..) => Some(trait_item.ident.name),
             _ => None,
         }
     }).collect();
@@ -1417,7 +1416,7 @@ fn trait_def_of_item<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                     .iter()
                     .enumerate()
                     .map(|(i, def)| tcx.mk_param(TypeSpace,
-                                                 i as u32, def.name))
+                                                 i as u32, def.ident.name))
                     .collect();
 
         // ...and also create the `Self` parameter.
@@ -1444,7 +1443,7 @@ fn trait_defines_associated_type_named(ccx: &CrateCtxt,
 
     trait_items.iter().any(|trait_item| {
         match trait_item.node {
-            hir::TypeTraitItem(..) => trait_item.name == assoc_name,
+            hir::TypeTraitItem(..) => trait_item.ident.name == assoc_name,
             _ => false,
         }
     })
@@ -1511,7 +1510,7 @@ fn convert_trait_predicates<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>, it: &hir::Item)
             };
 
             let assoc_ty = ccx.tcx.mk_projection(self_trait_ref,
-                                                 trait_item.name);
+                                                 trait_item.ident.name);
 
             let bounds = compute_bounds(&ccx.icx(&(ast_generics, trait_predicates)),
                                         assoc_ty,
@@ -1862,7 +1861,7 @@ fn ty_generic_predicates<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>,
     // type parameter (e.g., `<T:Foo>`).
     for (index, param) in ast_generics.ty_params.iter().enumerate() {
         let index = index as u32;
-        let param_ty = ty::ParamTy::new(space, index, param.name).to_ty(ccx.tcx);
+        let param_ty = ty::ParamTy::new(space, index, param.ident.name).to_ty(ccx.tcx);
         let bounds = compute_bounds(&ccx.icx(&(base_predicates, ast_generics)),
                                     param_ty,
                                     &param.bounds,
@@ -2033,7 +2032,7 @@ fn get_or_create_type_parameter_def<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>,
     let def = ty::TypeParameterDef {
         space: space,
         index: index,
-        name: param.name,
+        name: param.ident.name,
         def_id: DefId::local(param.id),
         default_def_id: DefId::local(parent),
         default: default,
@@ -2375,7 +2374,7 @@ fn check_method_self_type<'a, 'tcx, RS:RegionScope>(
          * before we really have a `ParameterEnvironment` to check.
          */
 
-        tcx.fold_regions(value, &mut false, |region, _| {
+        ty_fold::fold_regions(tcx, value, &mut false, |region, _| {
             match region {
                 ty::ReEarlyBound(data) => {
                     let def_id = DefId::local(data.param_id);
@@ -2415,7 +2414,7 @@ fn enforce_impl_params_are_constrained<'tcx>(tcx: &ty::ctxt<'tcx>,
     for (index, ty_param) in ast_generics.ty_params.iter().enumerate() {
         let param_ty = ty::ParamTy { space: TypeSpace,
                                      idx: index as u32,
-                                     name: ty_param.name };
+                                     name: ty_param.ident.name };
         if !input_parameters.contains(&ctp::Parameter::Type(param_ty)) {
             report_unused_parameter(tcx, ty_param.span, "type", &param_ty.to_string());
         }

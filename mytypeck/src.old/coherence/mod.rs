@@ -20,7 +20,6 @@ use middle::def_id::{DefId, LOCAL_CRATE};
 use middle::lang_items::UnsizeTraitLangItem;
 use middle::subst::{self, Subst};
 use middle::traits;
-use middle::ty;
 use middle::ty::RegionEscape;
 use middle::ty::{ImplContainer, ImplOrTraitItemId, ConstTraitItemId};
 use middle::ty::{MethodTraitItemId, TypeTraitItemId, ParameterEnvironment};
@@ -30,7 +29,7 @@ use middle::ty::{TyRef, TyStruct, TyTrait, TyTuple};
 use middle::ty::{TyStr, TyArray, TySlice, TyFloat, TyInfer, TyInt};
 use middle::ty::{TyUint, TyClosure, TyBox, TyBareFn};
 use middle::ty::TyProjection;
-use middle::ty::util::CopyImplementationError;
+use middle::ty;
 use middle::free_region::FreeRegionMap;
 use CrateCtxt;
 use middle::infer::{self, InferCtxt, new_infer_ctxt};
@@ -87,9 +86,9 @@ fn get_base_type_def_id<'a, 'tcx>(inference_context: &InferCtxt<'a, 'tcx>,
 }
 
 pub struct CoherenceChecker<'a, 'tcx: 'a> {
-    crate_context: &'a CrateCtxt<'a, 'tcx>,
-    inference_context: InferCtxt<'a, 'tcx>,
-    inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<DefId>>>>>,
+    pub crate_context: &'a CrateCtxt<'a, 'tcx>,
+    pub inference_context: InferCtxt<'a, 'tcx>,
+    pub inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<DefId>>>>>,
 }
 
 struct CoherenceCheckVisitor<'a, 'tcx: 'a> {
@@ -149,7 +148,7 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
         if let Some(trait_ref) = self.crate_context.tcx.impl_trait_ref(impl_did) {
             debug!("(checking implementation) adding impl for trait '{:?}', item '{}'",
                    trait_ref,
-                   item.name);
+                   item.ident);
 
             enforce_trait_manually_implementable(self.crate_context.tcx,
                                                  item.span,
@@ -371,27 +370,27 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
 
             match param_env.can_type_implement_copy(self_type, span) {
                 Ok(()) => {}
-                Err(CopyImplementationError::InfrigingField(name)) => {
+                Err(ty::FieldDoesNotImplementCopy(name)) => {
                        span_err!(tcx.sess, span, E0204,
                                  "the trait `Copy` may not be \
                                           implemented for this type; field \
                                           `{}` does not implement `Copy`",
                                          name)
                 }
-                Err(CopyImplementationError::InfrigingVariant(name)) => {
+                Err(ty::VariantDoesNotImplementCopy(name)) => {
                        span_err!(tcx.sess, span, E0205,
                                  "the trait `Copy` may not be \
                                           implemented for this type; variant \
                                           `{}` does not implement `Copy`",
                                          name)
                 }
-                Err(CopyImplementationError::NotAnAdt) => {
+                Err(ty::TypeIsStructural) => {
                        span_err!(tcx.sess, span, E0206,
                                  "the trait `Copy` may not be implemented \
                                   for this type; type is not a structure or \
                                   enumeration")
                 }
-                Err(CopyImplementationError::HasDestructor) => {
+                Err(ty::TypeHasDestructor) => {
                     span_err!(tcx.sess, span, E0184,
                               "the trait `Copy` may not be implemented for this type; \
                                the type has a destructor");
@@ -447,7 +446,7 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
                                mk_ptr: &Fn(Ty<'tcx>) -> Ty<'tcx>| {
                 if (mt_a.mutbl, mt_b.mutbl) == (hir::MutImmutable, hir::MutMutable) {
                     infcx.report_mismatched_types(span, mk_ptr(mt_b.ty),
-                                                  target, &ty::error::TypeError::Mutability);
+                                                  target, &ty::TypeError::Mutability);
                 }
                 (mt_a.ty, mt_b.ty, unsize_trait, None)
             };
@@ -480,16 +479,9 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
                     let fields = &def_a.struct_variant().fields;
                     let diff_fields = fields.iter().enumerate().filter_map(|(i, f)| {
                         let (a, b) = (f.ty(tcx, substs_a), f.ty(tcx, substs_b));
-
-                        if f.unsubst_ty().is_phantom_data() {
-                            // Ignore PhantomData fields
-                            None
-                        } else if infcx.sub_types(false, origin, b, a).is_ok() {
-                            // Ignore fields that aren't significantly changed
+                        if infcx.sub_types(false, origin, b, a).is_ok() {
                             None
                         } else {
-                            // Collect up all fields that were significantly changed
-                            // i.e. those that contain T in coerce_unsized T -> U
                             Some((i, a, b))
                         }
                     }).collect::<Vec<_>>();
@@ -518,7 +510,7 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
                     }
 
                     let (i, a, b) = diff_fields[0];
-                    let kind = ty::adjustment::CustomCoerceUnsized::Struct(i);
+                    let kind = ty::CustomCoerceUnsized::Struct(i);
                     (a, b, coerce_unsized_trait, Some(kind))
                 }
 

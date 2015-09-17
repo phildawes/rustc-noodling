@@ -1533,26 +1533,6 @@ For information on the design of the orphan rules, see [RFC 1023].
 [RFC 1023]: https://github.com/rust-lang/rfcs/pull/1023
 "##,
 
-E0118: r##"
-Rust can't find a base type for an implementation you are providing, or the type
-cannot have an implementation. For example, only a named type or a trait can
-have an implementation:
-
-```
-type NineString = [char, ..9] // This isn't a named type (struct, enum or trait)
-impl NineString {
-    // Some code here
-}
-```
-
-In the other, simpler case, Rust just can't find the type you are providing an
-impelementation for:
-
-```
-impl SomeTypeThatDoesntExist {  }
-```
-"##,
-
 E0119: r##"
 There are conflicting trait implementations for the same type.
 Example of erroneous code:
@@ -2495,24 +2475,6 @@ struct Bar<S, T> { x: Foo<S, T> }
 ```
 "##,
 
-//NB: not currently reachable
-E0247: r##"
-This error indicates an attempt to use a module name where a type is expected.
-For example:
-
-```
-mod MyMod {
-    mod MySubMod { }
-}
-
-fn do_something(x: MyMod::MySubMod) { }
-```
-
-In this example, we're attempting to take a parameter of type `MyMod::MySubMod`
-in the do_something function. This is not legal: `MyMod::MySubMod` is a module
-name, not a type.
-"##,
-
 E0248: r##"
 This error indicates an attempt to use a value where a type is expected. For
 example:
@@ -2862,26 +2824,13 @@ impl <T: Foo> Drop for MyStructWrapper<T> {
 
 E0368: r##"
 This error indicates that a binary assignment operator like `+=` or `^=` was
-applied to a type that doesn't support it. For example:
+applied to the wrong types. For example:
 
 ```
-let mut x = 12f32; // error: binary operation `<<` cannot be applied to
-               //        type `f32`
-
-x <<= 2;
+let mut x: u16 = 5;
+x ^= true; // error, `^=` cannot be applied to types `u16` and `bool`
+x += ();   // error, `+=` cannot be applied to types `u16` and `()`
 ```
-
-To fix this error, please check that this type implements this binary
-operation. Example:
-
-```
-let x = 12u32; // the `u32` type does implement the `ShlAssign` trait
-
-x <<= 2; // ok!
-```
-
-It is also possible to overload most operators for your own type by
-implementing the `[OP]Assign` traits from `std::ops`.
 
 Another problem you might be facing is this: suppose you've overloaded the `+`
 operator for some type `Foo` by implementing the `std::ops::Add` trait for
@@ -2902,12 +2851,15 @@ impl Add for Foo {
 
 fn main() {
     let mut x: Foo = Foo(5);
-    x += Foo(7); // error, `+= cannot be applied to the type `Foo`
+    x += Foo(7); // error, `+= cannot be applied to types `Foo` and `Foo`
 }
 ```
 
-This is because `AddAssign` is not automatically implemented, so you need to
-manually implement it for your type.
+This is because the binary assignment operators currently do not work off of
+traits, so it is not possible to overload them. See [RFC 953] for a proposal
+to change this.
+
+[RFC 953]: https://github.com/rust-lang/rfcs/pull/953
 "##,
 
 E0369: r##"
@@ -3288,6 +3240,7 @@ register_diagnostics! {
     E0090,
     E0103, // @GuillaumeGomez: I was unable to get this error, try your best!
     E0104,
+    E0118,
 //  E0123,
 //  E0127,
 //  E0129,
@@ -3323,6 +3276,7 @@ register_diagnostics! {
     E0226, // only a single explicit lifetime bound is permitted
     E0227, // ambiguous lifetime bound, explicit lifetime bound required
     E0228, // explicit lifetime bound required
+    E0229, // associated type bindings are not allowed here
     E0230, // there is no type parameter on trait
     E0231, // only named substitution parameters are allowed
 //  E0233,
@@ -3337,6 +3291,7 @@ register_diagnostics! {
     E0242, // internal error looking up a definition
     E0245, // not a trait
 //  E0246, // invalid recursive type
+    E0247, // found module name used as a type
 //  E0319, // trait impls for defaulted traits allowed just for structs/enums
     E0320, // recursive overflow during dropck
     E0321, // extended coherence rules for defaulted traits violated
@@ -3354,6 +3309,5 @@ register_diagnostics! {
            // type because its default value `{}` references the type `Self`"
     E0399, // trait items need to be implemented because the associated
            // type `{}` was overridden
-    E0436, // functional record update requires a struct
-    E0513, // no type for local variable ..
+    E0436,  // functional record update requires a struct
 }

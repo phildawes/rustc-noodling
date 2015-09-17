@@ -10,6 +10,7 @@
 
 
 use middle::ty;
+use middle::ty_fold;
 
 use std::cell::Cell;
 use syntax::codemap::Span;
@@ -238,11 +239,11 @@ impl<'r> ShiftedRscope<'r> {
 impl<'r> RegionScope for ShiftedRscope<'r> {
     fn object_lifetime_default(&self, span: Span) -> Option<ty::Region> {
         self.base_scope.object_lifetime_default(span)
-            .map(|r| ty::fold::shift_region(r, 1))
+            .map(|r| ty_fold::shift_region(r, 1))
     }
 
     fn base_object_lifetime_default(&self, span: Span) -> ty::Region {
-        ty::fold::shift_region(self.base_scope.base_object_lifetime_default(span), 1)
+        ty_fold::shift_region(self.base_scope.base_object_lifetime_default(span), 1)
     }
 
     fn anon_regions(&self,
@@ -253,7 +254,7 @@ impl<'r> RegionScope for ShiftedRscope<'r> {
         match self.base_scope.anon_regions(span, count) {
             Ok(mut v) => {
                 for r in &mut v {
-                    *r = ty::fold::shift_region(*r, 1);
+                    *r = ty_fold::shift_region(*r, 1);
                 }
                 Ok(v)
             }

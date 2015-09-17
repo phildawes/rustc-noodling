@@ -15,10 +15,10 @@ use middle::pat_util::{PatIdMap, pat_id_map, pat_is_binding};
 use middle::pat_util::pat_is_resolved_const;
 use middle::privacy::{AllPublic, LastMod};
 use middle::subst::Substs;
-use middle::ty::{self, Ty, HasTypeFlags, LvaluePreference};
+use middle::ty::{self, Ty, HasTypeFlags};
 use check::{check_expr, check_expr_has_type, check_expr_with_expectation};
 use check::{check_expr_coercable_to_type, demand, FnCtxt, Expectation};
-use check::{check_expr_with_lvalue_pref};
+use check::{check_expr_with_lvalue_pref, LvaluePreference};
 use check::{instantiate_path, resolve_ty_and_def_ufcs, structurally_resolved_type};
 use require_same_types;
 use util::nodemap::FnvHashMap;
@@ -56,7 +56,7 @@ pub fn check_pat<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
             // They can denote both statically and dynamically sized byte arrays
             let mut pat_ty = expr_ty;
             if let hir::ExprLit(ref lt) = lt.node {
-                if let ast::LitByteStr(_) = lt.node {
+                if let hir::LitBinary(_) = lt.node {
                     let expected_ty = structurally_resolved_type(fcx, pat.span, expected);
                     if let ty::TyRef(_, mt) = expected_ty.sty {
                         if let ty::TySlice(_) = mt.ty.sty {
@@ -292,7 +292,7 @@ pub fn check_pat<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
                     let region = fcx.infcx().next_region_var(infer::PatternRegion(pat.span));
                     tcx.mk_ref(tcx.mk_region(region), ty::TypeAndMut {
                         ty: tcx.mk_slice(inner_ty),
-                        mutbl: expected_ty.builtin_deref(true, ty::NoPreference).map(|mt| mt.mutbl)
+                        mutbl: expected_ty.builtin_deref(true).map(|mt| mt.mutbl)
                                                               .unwrap_or(hir::MutImmutable)
                     })
                 }
@@ -310,7 +310,7 @@ pub fn check_pat<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
             }
             if let Some(ref slice) = *slice {
                 let region = fcx.infcx().next_region_var(infer::PatternRegion(pat.span));
-                let mutbl = expected_ty.builtin_deref(true, ty::NoPreference)
+                let mutbl = expected_ty.builtin_deref(true)
                     .map_or(hir::MutImmutable, |mt| mt.mutbl);
 
                 let slice_ty = tcx.mk_ref(tcx.mk_region(region), ty::TypeAndMut {
@@ -399,7 +399,7 @@ pub fn check_dereferencable<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
     let tcx = pcx.fcx.ccx.tcx;
     if pat_is_binding(&tcx.def_map, inner) {
         let expected = fcx.infcx().shallow_resolve(expected);
-        expected.builtin_deref(true, ty::NoPreference).map_or(true, |mt| match mt.ty.sty {
+        expected.builtin_deref(true).map_or(true, |mt| match mt.ty.sty {
             ty::TyTrait(_) => {
                 // This is "x = SomeTrait" being reduced from
                 // "let &x = &SomeTrait" or "let box x = Box<SomeTrait>", an error.
@@ -706,25 +706,25 @@ pub fn check_struct_pat_fields<'a, 'tcx>(pcx: &pat_ctxt<'a, 'tcx>,
 
     // Typecheck each field.
     for &Spanned { node: ref field, span } in fields {
-        let field_ty = match used_fields.entry(field.name) {
+        let field_ty = match used_fields.entry(field.ident.name) {
             Occupied(occupied) => {
                 span_err!(tcx.sess, span, E0025,
                     "field `{}` bound multiple times in the pattern",
-                    field.name);
+                    field.ident);
                 span_note!(tcx.sess, *occupied.get(),
                     "field `{}` previously bound here",
-                    field.name);
+                    field.ident);
                 tcx.types.err
             }
             Vacant(vacant) => {
                 vacant.insert(span);
-                field_map.get(&field.name)
+                field_map.get(&field.ident.name)
                     .map(|f| pcx.fcx.field_ty(span, f, substs))
                     .unwrap_or_else(|| {
                         span_err!(tcx.sess, span, E0026,
                             "struct `{}` does not have a field named `{}`",
                             tcx.item_path_str(variant.did),
-                            field.name);
+                            field.ident);
                         tcx.types.err
                     })
             }
