@@ -115,17 +115,16 @@ fn myfn(){
 }
 ";
 
+    let krate_config = Vec::new();
+    let input = config::Input::Str(src.to_string());
+
     let sess = create_session();
 
-    let krate_config = Vec::new();
-
-    let input = config::Input::Str(src.to_string());
     // parse a the crate
     let krate = driver::phase_1_parse_input(&sess, krate_config, &input);
 
     let skeleton_krate = driver::phase_2_configure_and_expand(&sess, krate, "a", None)
                     .expect("phase 2 aborted");
-
 
     // cache the krate!
     let mut krate = skeleton_krate.clone();
@@ -163,7 +162,7 @@ fn bar<T:Read>(v: Vec<T>) {
         krate = f.fold_crate(krate);
     }
 
-    perform_second_phase(krate);    
+    perform_second_phase(krate);  
 }
 
 
@@ -595,6 +594,8 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
                                                        crate_name: &str,
                                                    addl_plugins: Option<Vec<String>>)
                                                        -> Option<ast::Crate> {
+    let mut tv = Timer::new();
+
     let time_passes = sess.time_passes();
 
     // strip before anything else because crate metadata may use #[cfg_attr]
@@ -636,10 +637,12 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
     let macros = time(time_passes, "macro loading", (), |_|
         metadata::macro_import::read_macro_defs(sess, &krate));
 
+    tv.add("macro loading");
     let mut addl_plugins = Some(addl_plugins);
     let registrars = time(time_passes, "plugin loading", (), |_|
         plugin::load::load_plugins(sess, &krate, addl_plugins.take().unwrap()));
 
+    tv.add("plugin loading");
     let mut registry = Registry::new(sess, &krate);
 
     time(time_passes, "plugin registration", registrars, |registrars| {
@@ -658,6 +661,8 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
         }
     });
 
+    tv.add("plugin registration");
+
     let Registry { syntax_exts, lint_passes, lint_groups,
                    llvm_passes, attributes, .. } = registry;
 
@@ -674,6 +679,9 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
         *sess.plugin_llvm_passes.borrow_mut() = llvm_passes;
         *sess.plugin_attributes.borrow_mut() = attributes.clone();
     }
+
+
+    tv.add("plugin registration2");
 
     // // Lint plugins are registered; now we can process command line flags.
     // if sess.opts.describe_lints {
@@ -719,6 +727,8 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
         }
     );
 
+    tv.add("expansion");
+
     // Needs to go *after* expansion to be able to check the results
     // of macro expansion.  This runs before #[cfg] to try to catch as
     // much as possible (e.g. help the programmer avoid platform
@@ -732,24 +742,28 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
         sess.abort_if_errors();
     });
 
+    tv.add("gated feature checking");
     // JBC: make CFG processing part of expansion to avoid this problem:
 
     // strip again, in case expansion added anything with a #[cfg].
     krate = time(time_passes, "configuration 2", krate, |krate|
                  syntax::config::strip_unconfigured_items(sess.diagnostic(), krate));
 
+    tv.add("strip cfg");
+
     krate = time(time_passes, "maybe building test harness", krate, |krate|
                  syntax::test::modify_for_testing(&sess.parse_sess,
                                                   &sess.opts.cfg,
                                                   krate,
                                                   sess.diagnostic()));
-
-    krate = time(time_passes, "prelude injection", krate, |krate|
-                 syntax::std_inject::maybe_inject_prelude(krate));
+    tv.add("maybe build test harness");
+    // krate = time(time_passes, "prelude injection", krate, |krate|
+    //              syntax::std_inject::maybe_inject_prelude(krate));
 
     time(time_passes, "checking that all macro invocations are gone", &krate, |krate|
          syntax::ext::expand::check_for_macros(&sess.parse_sess, krate));
 
+    tv.add("check macro invocations are gone");
     // One final feature gating of the true AST that gets compiled
     // later, to make sure we've got everything (e.g. configuration
     // can insert new attributes via `cfg_attr`)
@@ -762,6 +776,11 @@ pub fn phase_2_configure_and_expand_without_std_inject(sess: &session::Session,
         sess.abort_if_errors();
     });
 
+    tv.add("complete feature gate checking");
+
+    for (s, time, duration) in tv.tv {
+        println!("phase2 {}: {} \t {}",duration, time - tv.t0, s);
+    }
     Some(krate)
 }
 

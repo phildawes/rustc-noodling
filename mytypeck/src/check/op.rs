@@ -20,19 +20,20 @@ use super::{
     PreferMutLvalue,
     structurally_resolved_type,
 };
+use middle::def_id::DefId;
 use middle::traits;
-use middle::ty::{self, Ty};
+use middle::ty::{Ty, HasTypeFlags};
 use syntax::ast;
-use syntax::ast_util;
 use syntax::parse::token;
-use util::ppaux::{Repr, UserString};
+use rustc_front::hir;
+use rustc_front::util as hir_util;
 
 /// Check a `a <op>= b`
 pub fn check_binop_assign<'a,'tcx>(fcx: &FnCtxt<'a,'tcx>,
-                                   expr: &'tcx ast::Expr,
-                                   op: ast::BinOp,
-                                   lhs_expr: &'tcx ast::Expr,
-                                   rhs_expr: &'tcx ast::Expr)
+                                   expr: &'tcx hir::Expr,
+                                   op: hir::BinOp,
+                                   lhs_expr: &'tcx hir::Expr,
+                                   rhs_expr: &'tcx hir::Expr)
 {
     let tcx = fcx.ccx.tcx;
 
@@ -42,23 +43,23 @@ pub fn check_binop_assign<'a,'tcx>(fcx: &FnCtxt<'a,'tcx>,
     let lhs_ty = structurally_resolved_type(fcx, lhs_expr.span, fcx.expr_ty(lhs_expr));
     let rhs_ty = structurally_resolved_type(fcx, rhs_expr.span, fcx.expr_ty(rhs_expr));
 
-    if is_builtin_binop(fcx.tcx(), lhs_ty, rhs_ty, op) {
+    if is_builtin_binop(lhs_ty, rhs_ty, op) {
         enforce_builtin_binop_types(fcx, lhs_expr, lhs_ty, rhs_expr, rhs_ty, op);
         fcx.write_nil(expr.id);
     } else {
         // error types are considered "builtin"
-        assert!(!ty::type_is_error(lhs_ty) || !ty::type_is_error(rhs_ty));
+        assert!(!lhs_ty.references_error() || !rhs_ty.references_error());
         span_err!(tcx.sess, lhs_expr.span, E0368,
                   "binary assignment operation `{}=` cannot be applied to types `{}` and `{}`",
-                  ast_util::binop_to_string(op.node),
-                  lhs_ty.user_string(fcx.tcx()),
-                  rhs_ty.user_string(fcx.tcx()));
+                  hir_util::binop_to_string(op.node),
+                  lhs_ty,
+                  rhs_ty);
         fcx.write_error(expr.id);
     }
 
     let tcx = fcx.tcx();
-    if !ty::expr_is_lval(tcx, lhs_expr) {
-        span_err!(tcx.sess, lhs_expr.span, E0067, "illegal left-hand side expression");
+    if !tcx.expr_is_lval(lhs_expr) {
+        span_err!(tcx.sess, lhs_expr.span, E0067, "invalid left-hand side expression");
     }
 
     fcx.require_expr_have_sized_type(lhs_expr, traits::AssignmentLhsSized);
@@ -66,41 +67,29 @@ pub fn check_binop_assign<'a,'tcx>(fcx: &FnCtxt<'a,'tcx>,
 
 /// Check a potentially overloaded binary operator.
 pub fn check_binop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
-                             expr: &'tcx ast::Expr,
-                             op: ast::BinOp,
-                             lhs_expr: &'tcx ast::Expr,
-                             rhs_expr: &'tcx ast::Expr)
+                             expr: &'tcx hir::Expr,
+                             op: hir::BinOp,
+                             lhs_expr: &'tcx hir::Expr,
+                             rhs_expr: &'tcx hir::Expr)
 {
     let tcx = fcx.ccx.tcx;
 
-    debug!("check_binop(expr.id={}, expr={}, op={:?}, lhs_expr={}, rhs_expr={})",
+    debug!("check_binop(expr.id={}, expr={:?}, op={:?}, lhs_expr={:?}, rhs_expr={:?})",
            expr.id,
-           expr.repr(tcx),
+           expr,
            op,
-           lhs_expr.repr(tcx),
-           rhs_expr.repr(tcx));
+           lhs_expr,
+           rhs_expr);
 
     check_expr(fcx, lhs_expr);
     let lhs_ty = fcx.resolve_type_vars_if_possible(fcx.expr_ty(lhs_expr));
 
-    // Annoyingly, SIMD ops don't fit into the PartialEq/PartialOrd
-    // traits, because their return type is not bool. Perhaps this
-    // should change, but for now if LHS is SIMD we go down a
-    // different path that bypassess all traits.
-    if ty::type_is_simd(fcx.tcx(), lhs_ty) {
-        check_expr_coercable_to_type(fcx, rhs_expr, lhs_ty);
-        let rhs_ty = fcx.resolve_type_vars_if_possible(fcx.expr_ty(lhs_expr));
-        let return_ty = enforce_builtin_binop_types(fcx, lhs_expr, lhs_ty, rhs_expr, rhs_ty, op);
-        fcx.write_ty(expr.id, return_ty);
-        return;
-    }
-
     match BinOpCategory::from(op) {
         BinOpCategory::Shortcircuit => {
             // && and || are a simple case.
-            demand::suptype(fcx, lhs_expr.span, ty::mk_bool(tcx), lhs_ty);
-            check_expr_coercable_to_type(fcx, rhs_expr, ty::mk_bool(tcx));
-            fcx.write_ty(expr.id, ty::mk_bool(tcx));
+            demand::suptype(fcx, lhs_expr.span, tcx.mk_bool(), lhs_ty);
+            check_expr_coercable_to_type(fcx, rhs_expr, tcx.mk_bool());
+            fcx.write_ty(expr.id, tcx.mk_bool());
         }
         _ => {
             // Otherwise, we always treat operators as if they are
@@ -123,9 +112,8 @@ pub fn check_binop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
             // can't pin this down to a specific impl.
             let rhs_ty = fcx.resolve_type_vars_if_possible(rhs_ty);
             if
-                !ty::type_is_ty_var(lhs_ty) &&
-                !ty::type_is_ty_var(rhs_ty) &&
-                is_builtin_binop(fcx.tcx(), lhs_ty, rhs_ty, op)
+                !lhs_ty.is_ty_var() && !rhs_ty.is_ty_var() &&
+                is_builtin_binop(lhs_ty, rhs_ty, op)
             {
                 let builtin_return_ty =
                     enforce_builtin_binop_types(fcx, lhs_expr, lhs_ty, rhs_expr, rhs_ty, op);
@@ -138,30 +126,24 @@ pub fn check_binop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
 }
 
 fn enforce_builtin_binop_types<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
-                                         lhs_expr: &'tcx ast::Expr,
+                                         lhs_expr: &'tcx hir::Expr,
                                          lhs_ty: Ty<'tcx>,
-                                         rhs_expr: &'tcx ast::Expr,
+                                         rhs_expr: &'tcx hir::Expr,
                                          rhs_ty: Ty<'tcx>,
-                                         op: ast::BinOp)
+                                         op: hir::BinOp)
                                          -> Ty<'tcx>
 {
-    debug_assert!(is_builtin_binop(fcx.tcx(), lhs_ty, rhs_ty, op));
+    debug_assert!(is_builtin_binop(lhs_ty, rhs_ty, op));
 
     let tcx = fcx.tcx();
     match BinOpCategory::from(op) {
         BinOpCategory::Shortcircuit => {
-            demand::suptype(fcx, lhs_expr.span, ty::mk_bool(tcx), lhs_ty);
-            demand::suptype(fcx, rhs_expr.span, ty::mk_bool(tcx), rhs_ty);
-            ty::mk_bool(tcx)
+            demand::suptype(fcx, lhs_expr.span, tcx.mk_bool(), lhs_ty);
+            demand::suptype(fcx, rhs_expr.span, tcx.mk_bool(), rhs_ty);
+            tcx.mk_bool()
         }
 
         BinOpCategory::Shift => {
-            // For integers, the shift amount can be of any integral
-            // type. For simd, the type must match exactly.
-            if ty::type_is_simd(tcx, lhs_ty) {
-                demand::suptype(fcx, rhs_expr.span, lhs_ty, rhs_ty);
-            }
-
             // result type is same as LHS always
             lhs_ty
         }
@@ -176,42 +158,22 @@ fn enforce_builtin_binop_types<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
         BinOpCategory::Comparison => {
             // both LHS and RHS and result will have the same type
             demand::suptype(fcx, rhs_expr.span, lhs_ty, rhs_ty);
-
-            // if this is simd, result is same as lhs, else bool
-            if ty::type_is_simd(tcx, lhs_ty) {
-                let unit_ty = ty::simd_type(tcx, lhs_ty);
-                debug!("enforce_builtin_binop_types: lhs_ty={} unit_ty={}",
-                       lhs_ty.repr(tcx),
-                       unit_ty.repr(tcx));
-                if !ty::type_is_integral(unit_ty) {
-                    tcx.sess.span_err(
-                        lhs_expr.span,
-                        &format!("binary comparison operation `{}` not supported \
-                                  for floating point SIMD vector `{}`",
-                                 ast_util::binop_to_string(op.node),
-                                 lhs_ty.user_string(tcx)));
-                    tcx.types.err
-                } else {
-                    lhs_ty
-                }
-            } else {
-                ty::mk_bool(tcx)
-            }
+            tcx.mk_bool()
         }
     }
 }
 
 fn check_overloaded_binop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
-                                    expr: &'tcx ast::Expr,
-                                    lhs_expr: &'tcx ast::Expr,
+                                    expr: &'tcx hir::Expr,
+                                    lhs_expr: &'tcx hir::Expr,
                                     lhs_ty: Ty<'tcx>,
-                                    rhs_expr: &'tcx ast::Expr,
-                                    op: ast::BinOp)
+                                    rhs_expr: &'tcx hir::Expr,
+                                    op: hir::BinOp)
                                     -> (Ty<'tcx>, Ty<'tcx>)
 {
-    debug!("check_overloaded_binop(expr.id={}, lhs_ty={})",
+    debug!("check_overloaded_binop(expr.id={}, lhs_ty={:?})",
            expr.id,
-           lhs_ty.repr(fcx.tcx()));
+           lhs_ty);
 
     let (name, trait_def_id) = name_and_trait_def_id(fcx, op);
 
@@ -229,11 +191,11 @@ fn check_overloaded_binop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
         Ok(return_ty) => return_ty,
         Err(()) => {
             // error types are considered "builtin"
-            if !ty::type_is_error(lhs_ty) {
+            if !lhs_ty.references_error() {
                 span_err!(fcx.tcx().sess, lhs_expr.span, E0369,
                           "binary operation `{}` cannot be applied to type `{}`",
-                          ast_util::binop_to_string(op.node),
-                          lhs_ty.user_string(fcx.tcx()));
+                          hir_util::binop_to_string(op.node),
+                          lhs_ty);
             }
             fcx.tcx().types.err
         }
@@ -248,14 +210,14 @@ fn check_overloaded_binop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
 pub fn check_user_unop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
                                  op_str: &str,
                                  mname: &str,
-                                 trait_did: Option<ast::DefId>,
-                                 ex: &'tcx ast::Expr,
-                                 operand_expr: &'tcx ast::Expr,
+                                 trait_did: Option<DefId>,
+                                 ex: &'tcx hir::Expr,
+                                 operand_expr: &'tcx hir::Expr,
                                  operand_ty: Ty<'tcx>,
-                                 op: ast::UnOp)
+                                 op: hir::UnOp)
                                  -> Ty<'tcx>
 {
-    assert!(ast_util::is_by_value_unop(op));
+    assert!(hir_util::is_by_value_unop(op));
     match lookup_op_method(fcx, ex, operand_ty, vec![],
                            token::intern(mname), trait_did,
                            operand_expr) {
@@ -270,46 +232,46 @@ pub fn check_user_unop<'a, 'tcx>(fcx: &FnCtxt<'a, 'tcx>,
     }
 }
 
-fn name_and_trait_def_id(fcx: &FnCtxt, op: ast::BinOp) -> (&'static str, Option<ast::DefId>) {
+fn name_and_trait_def_id(fcx: &FnCtxt, op: hir::BinOp) -> (&'static str, Option<DefId>) {
     let lang = &fcx.tcx().lang_items;
     match op.node {
-        ast::BiAdd => ("add", lang.add_trait()),
-        ast::BiSub => ("sub", lang.sub_trait()),
-        ast::BiMul => ("mul", lang.mul_trait()),
-        ast::BiDiv => ("div", lang.div_trait()),
-        ast::BiRem => ("rem", lang.rem_trait()),
-        ast::BiBitXor => ("bitxor", lang.bitxor_trait()),
-        ast::BiBitAnd => ("bitand", lang.bitand_trait()),
-        ast::BiBitOr => ("bitor", lang.bitor_trait()),
-        ast::BiShl => ("shl", lang.shl_trait()),
-        ast::BiShr => ("shr", lang.shr_trait()),
-        ast::BiLt => ("lt", lang.ord_trait()),
-        ast::BiLe => ("le", lang.ord_trait()),
-        ast::BiGe => ("ge", lang.ord_trait()),
-        ast::BiGt => ("gt", lang.ord_trait()),
-        ast::BiEq => ("eq", lang.eq_trait()),
-        ast::BiNe => ("ne", lang.eq_trait()),
-        ast::BiAnd | ast::BiOr => {
+        hir::BiAdd => ("add", lang.add_trait()),
+        hir::BiSub => ("sub", lang.sub_trait()),
+        hir::BiMul => ("mul", lang.mul_trait()),
+        hir::BiDiv => ("div", lang.div_trait()),
+        hir::BiRem => ("rem", lang.rem_trait()),
+        hir::BiBitXor => ("bitxor", lang.bitxor_trait()),
+        hir::BiBitAnd => ("bitand", lang.bitand_trait()),
+        hir::BiBitOr => ("bitor", lang.bitor_trait()),
+        hir::BiShl => ("shl", lang.shl_trait()),
+        hir::BiShr => ("shr", lang.shr_trait()),
+        hir::BiLt => ("lt", lang.ord_trait()),
+        hir::BiLe => ("le", lang.ord_trait()),
+        hir::BiGe => ("ge", lang.ord_trait()),
+        hir::BiGt => ("gt", lang.ord_trait()),
+        hir::BiEq => ("eq", lang.eq_trait()),
+        hir::BiNe => ("ne", lang.eq_trait()),
+        hir::BiAnd | hir::BiOr => {
             fcx.tcx().sess.span_bug(op.span, "&& and || are not overloadable")
         }
     }
 }
 
 fn lookup_op_method<'a, 'tcx>(fcx: &'a FnCtxt<'a, 'tcx>,
-                              expr: &'tcx ast::Expr,
+                              expr: &'tcx hir::Expr,
                               lhs_ty: Ty<'tcx>,
                               other_tys: Vec<Ty<'tcx>>,
                               opname: ast::Name,
-                              trait_did: Option<ast::DefId>,
-                              lhs_expr: &'a ast::Expr)
+                              trait_did: Option<DefId>,
+                              lhs_expr: &'a hir::Expr)
                               -> Result<Ty<'tcx>,()>
 {
-    debug!("lookup_op_method(expr={}, lhs_ty={}, opname={:?}, trait_did={}, lhs_expr={})",
-           expr.repr(fcx.tcx()),
-           lhs_ty.repr(fcx.tcx()),
+    debug!("lookup_op_method(expr={:?}, lhs_ty={:?}, opname={:?}, trait_did={:?}, lhs_expr={:?})",
+           expr,
+           lhs_ty,
            opname,
-           trait_did.repr(fcx.tcx()),
-           lhs_expr.repr(fcx.tcx()));
+           trait_did,
+           lhs_expr);
 
     let method = match trait_did {
         Some(trait_did) => {
@@ -332,12 +294,12 @@ fn lookup_op_method<'a, 'tcx>(fcx: &'a FnCtxt<'a, 'tcx>,
 
             // HACK(eddyb) Fully qualified path to work around a resolve bug.
             let method_call = ::middle::ty::MethodCall::expr(expr.id);
-            fcx.inh.method_map.borrow_mut().insert(method_call, method);
+            fcx.inh.tables.borrow_mut().method_map.insert(method_call, method);
 
             // extract return type for method; all late bound regions
             // should have been instantiated by now
-            let ret_ty = ty::ty_fn_ret(method_ty);
-            Ok(ty::no_late_bound_regions(fcx.tcx(), &ret_ty).unwrap().unwrap())
+            let ret_ty = method_ty.fn_ret();
+            Ok(fcx.tcx().no_late_bound_regions(&ret_ty).unwrap().unwrap())
         }
         None => {
             Err(())
@@ -369,33 +331,33 @@ enum BinOpCategory {
 }
 
 impl BinOpCategory {
-    fn from(op: ast::BinOp) -> BinOpCategory {
+    fn from(op: hir::BinOp) -> BinOpCategory {
         match op.node {
-            ast::BiShl | ast::BiShr =>
+            hir::BiShl | hir::BiShr =>
                 BinOpCategory::Shift,
 
-            ast::BiAdd |
-            ast::BiSub |
-            ast::BiMul |
-            ast::BiDiv |
-            ast::BiRem =>
+            hir::BiAdd |
+            hir::BiSub |
+            hir::BiMul |
+            hir::BiDiv |
+            hir::BiRem =>
                 BinOpCategory::Math,
 
-            ast::BiBitXor |
-            ast::BiBitAnd |
-            ast::BiBitOr =>
+            hir::BiBitXor |
+            hir::BiBitAnd |
+            hir::BiBitOr =>
                 BinOpCategory::Bitwise,
 
-            ast::BiEq |
-            ast::BiNe |
-            ast::BiLt |
-            ast::BiLe |
-            ast::BiGe |
-            ast::BiGt =>
+            hir::BiEq |
+            hir::BiNe |
+            hir::BiLt |
+            hir::BiLe |
+            hir::BiGe |
+            hir::BiGt =>
                 BinOpCategory::Comparison,
 
-            ast::BiAnd |
-            ast::BiOr =>
+            hir::BiAnd |
+            hir::BiOr =>
                 BinOpCategory::Shortcircuit,
         }
     }
@@ -417,10 +379,9 @@ impl BinOpCategory {
 /// Reason #2 is the killer. I tried for a while to always use
 /// overloaded logic and just check the types in constants/trans after
 /// the fact, and it worked fine, except for SIMD types. -nmatsakis
-fn is_builtin_binop<'tcx>(cx: &ty::ctxt<'tcx>,
-                          lhs: Ty<'tcx>,
+fn is_builtin_binop<'tcx>(lhs: Ty<'tcx>,
                           rhs: Ty<'tcx>,
-                          op: ast::BinOp)
+                          op: hir::BinOp)
                           -> bool
 {
     match BinOpCategory::from(op) {
@@ -429,31 +390,26 @@ fn is_builtin_binop<'tcx>(cx: &ty::ctxt<'tcx>,
         }
 
         BinOpCategory::Shift => {
-            ty::type_is_error(lhs) || ty::type_is_error(rhs) ||
-                ty::type_is_integral(lhs) && ty::type_is_integral(rhs) ||
-                ty::type_is_simd(cx, lhs) && ty::type_is_simd(cx, rhs)
+            lhs.references_error() || rhs.references_error() ||
+                lhs.is_integral() && rhs.is_integral()
         }
 
         BinOpCategory::Math => {
-            ty::type_is_error(lhs) || ty::type_is_error(rhs) ||
-                ty::type_is_integral(lhs) && ty::type_is_integral(rhs) ||
-                ty::type_is_floating_point(lhs) && ty::type_is_floating_point(rhs) ||
-                ty::type_is_simd(cx, lhs) && ty::type_is_simd(cx, rhs)
+            lhs.references_error() || rhs.references_error() ||
+                lhs.is_integral() && rhs.is_integral() ||
+                lhs.is_floating_point() && rhs.is_floating_point()
         }
 
         BinOpCategory::Bitwise => {
-            ty::type_is_error(lhs) || ty::type_is_error(rhs) ||
-                ty::type_is_integral(lhs) && ty::type_is_integral(rhs) ||
-                ty::type_is_floating_point(lhs) && ty::type_is_floating_point(rhs) ||
-                ty::type_is_simd(cx, lhs) && ty::type_is_simd(cx, rhs) ||
-                ty::type_is_bool(lhs) && ty::type_is_bool(rhs)
+            lhs.references_error() || rhs.references_error() ||
+                lhs.is_integral() && rhs.is_integral() ||
+                lhs.is_floating_point() && rhs.is_floating_point() ||
+                lhs.is_bool() && rhs.is_bool()
         }
 
         BinOpCategory::Comparison => {
-            ty::type_is_error(lhs) || ty::type_is_error(rhs) ||
-                ty::type_is_scalar(lhs) && ty::type_is_scalar(rhs) ||
-                ty::type_is_simd(cx, lhs) && ty::type_is_simd(cx, rhs)
+            lhs.references_error() || rhs.references_error() ||
+                lhs.is_scalar() && rhs.is_scalar()
         }
     }
 }
-
