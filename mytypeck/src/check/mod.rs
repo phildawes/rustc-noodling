@@ -363,7 +363,7 @@ fn static_inherited_fields<'a, 'tcx>(ccx: &'a CrateCtxt<'a, 'tcx>,
 }
 
 pub struct CheckItemTypesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
-pub struct CheckItemBodiesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
+pub struct CheckItemBodiesVisitor<'a, 'tcx: 'a> { pub ccx: &'a CrateCtxt<'a, 'tcx> }
 
 impl<'a, 'tcx> Visitor<'tcx> for CheckItemTypesVisitor<'a, 'tcx> {
     fn visit_item(&mut self, i: &'tcx hir::Item) {
@@ -452,11 +452,12 @@ fn check_bare_fn<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                            fn_id: ast::NodeId,
                            fn_span: Span,
                            raw_fty: Ty<'tcx>,
-                           param_env: ty::ParameterEnvironment<'a, 'tcx>)
+                           param_env: ty::ParameterEnvironment<'a, 'tcx>) -> RefCell<ty::Tables<'tcx>>
 {
     match raw_fty.sty {
         ty::TyBareFn(_, ref fn_ty) => {
             let tables = RefCell::new(ty::Tables::empty());
+            {
             let inh = Inherited::new(ccx.tcx, &tables, param_env);
 
             // Compute the fty from point of view of inside fn.
@@ -478,9 +479,12 @@ fn check_bare_fn<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
             fcx.select_obligations_where_possible();
             fcx.check_casts();
             fcx.select_all_obligations_or_error(); // Casts can introduce new obligations.
+            debug!("PHIL fcx {:?}", fcx.inh.tables.borrow().node_types);
 
             regionck::regionck_fn(&fcx, fn_id, fn_span, decl, body);
             writeback::resolve_type_vars_in_fn(&fcx, decl, body);
+            }
+            tables
         }
         _ => ccx.tcx.sess.impossible_case(body.span,
                                  "check_bare_fn: function type expected")
@@ -749,16 +753,21 @@ pub fn check_item_type<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) {
     }
 }
 
-pub fn check_item_body<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) {
+pub fn check_item_body<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) -> RefCell<ty::Tables<'tcx>> {
     debug!("check_item_body(it.id={}, it.ident={})",
            it.id,
            ccx.tcx.item_path_str(DefId::local(it.id)));
+
+    // PD: added to test return
+    let tables = RefCell::new(ty::Tables::empty());
+
+
     let _indenter = indenter();
     match it.node {
       hir::ItemFn(ref decl, _, _, _, _, ref body) => {
         let fn_pty = ccx.tcx.lookup_item_type(DefId::local(it.id));
         let param_env = ParameterEnvironment::for_item(ccx.tcx, it.id);
-        check_bare_fn(ccx, &**decl, &**body, it.id, it.span, fn_pty.ty, param_env);
+        return check_bare_fn(ccx, &**decl, &**body, it.id, it.span, fn_pty.ty, param_env)
       }
       hir::ItemImpl(_, _, _, _, _, ref impl_items) => {
         debug!("ItemImpl {} with id {}", it.name, it.id);
@@ -805,6 +814,7 @@ pub fn check_item_body<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) {
       }
       _ => {/* nothing to do */ }
     }
+    tables
 }
 
 fn check_trait_fn_not_const<'a,'tcx>(ccx: &CrateCtxt<'a, 'tcx>,

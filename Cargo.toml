@@ -4,8 +4,8 @@ version = "0.0.1"
 authors = ["Phil Dawes <phil@phildawes.net"]
 
 [[bin]]
-name = "try2"
-path = "src/try2.rs"
+name = "main"
+path = "src/main.rs"
 
 [dependencies]
 time = "*"
