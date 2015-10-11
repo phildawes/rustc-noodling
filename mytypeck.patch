@@ -1,36 +1,90 @@
 diff -ru /usr/local/src/rust/src/librustc_typeck/check/mod.rs mytypeck/src/check/mod.rs
---- /usr/local/src/rust/src/librustc_typeck/check/mod.rs	2015-05-27 07:33:21.127222930 +0100
-+++ mytypeck/src/check/mod.rs	2015-06-09 21:42:54.015063563 +0100
-@@ -435,8 +435,8 @@
-     Inherited::new(ccx.tcx, param_env)
+--- /usr/local/src/rust/src/librustc_typeck/check/mod.rs	2015-09-28 06:09:02.637550352 +0100
++++ mytypeck/src/check/mod.rs	2015-10-06 17:07:18.067910644 +0100
+@@ -362,8 +362,8 @@
+     Inherited::new(ccx.tcx, &tables, param_env)
  }
  
 -struct CheckItemTypesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
 -struct CheckItemBodiesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
-+pub struct CheckItemTypesVisitor<'a, 'tcx: 'a> { pub ccx: &'a CrateCtxt<'a, 'tcx> }
++pub struct CheckItemTypesVisitor<'a, 'tcx: 'a> { ccx: &'a CrateCtxt<'a, 'tcx> }
 +pub struct CheckItemBodiesVisitor<'a, 'tcx: 'a> { pub ccx: &'a CrateCtxt<'a, 'tcx> }
  
  impl<'a, 'tcx> Visitor<'tcx> for CheckItemTypesVisitor<'a, 'tcx> {
-     fn visit_item(&mut self, i: &'tcx ast::Item) {
+     fn visit_item(&mut self, i: &'tcx hir::Item) {
+@@ -452,11 +452,12 @@
+                            fn_id: ast::NodeId,
+                            fn_span: Span,
+                            raw_fty: Ty<'tcx>,
+-                           param_env: ty::ParameterEnvironment<'a, 'tcx>)
++                           param_env: ty::ParameterEnvironment<'a, 'tcx>) -> RefCell<ty::Tables<'tcx>>
+ {
+     match raw_fty.sty {
+         ty::TyBareFn(_, ref fn_ty) => {
+             let tables = RefCell::new(ty::Tables::empty());
++            {
+             let inh = Inherited::new(ccx.tcx, &tables, param_env);
+ 
+             // Compute the fty from point of view of inside fn.
+@@ -478,9 +479,12 @@
+             fcx.select_obligations_where_possible();
+             fcx.check_casts();
+             fcx.select_all_obligations_or_error(); // Casts can introduce new obligations.
++            debug!("PHIL fcx {:?}", fcx.inh.tables.borrow().node_types);
+ 
+             regionck::regionck_fn(&fcx, fn_id, fn_span, decl, body);
+             writeback::resolve_type_vars_in_fn(&fcx, decl, body);
++            }
++            tables
+         }
+         _ => ccx.tcx.sess.impossible_case(body.span,
+                                  "check_bare_fn: function type expected")
+@@ -749,16 +753,21 @@
+     }
+ }
+ 
+-pub fn check_item_body<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) {
++pub fn check_item_body<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) -> RefCell<ty::Tables<'tcx>> {
+     debug!("check_item_body(it.id={}, it.ident={})",
+            it.id,
+            ccx.tcx.item_path_str(DefId::local(it.id)));
++
++    // PD: added to test return
++    let tables = RefCell::new(ty::Tables::empty());
++
++
+     let _indenter = indenter();
+     match it.node {
+       hir::ItemFn(ref decl, _, _, _, _, ref body) => {
+         let fn_pty = ccx.tcx.lookup_item_type(DefId::local(it.id));
+         let param_env = ParameterEnvironment::for_item(ccx.tcx, it.id);
+-        check_bare_fn(ccx, &**decl, &**body, it.id, it.span, fn_pty.ty, param_env);
++        return check_bare_fn(ccx, &**decl, &**body, it.id, it.span, fn_pty.ty, param_env)
+       }
+       hir::ItemImpl(_, _, _, _, _, ref impl_items) => {
+         debug!("ItemImpl {} with id {}", it.name, it.id);
+@@ -805,6 +814,7 @@
+       }
+       _ => {/* nothing to do */ }
+     }
++    tables
+ }
+ 
+ fn check_trait_fn_not_const<'a,'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
+Only in /usr/local/src/rust/src/librustc_typeck/check: tmp
 diff -ru /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs mytypeck/src/coherence/mod.rs
---- /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs	2015-05-27 07:33:21.127222930 +0100
-+++ mytypeck/src/coherence/mod.rs	2015-05-27 13:41:34.569159485 +0100
-@@ -88,10 +88,10 @@
+--- /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs	2015-09-27 08:01:45.546617277 +0100
++++ mytypeck/src/coherence/mod.rs	2015-09-28 06:15:51.273568333 +0100
+@@ -86,7 +86,7 @@
      }
  }
  
 -struct CoherenceChecker<'a, 'tcx: 'a> {
--    crate_context: &'a CrateCtxt<'a, 'tcx>,
--    inference_context: InferCtxt<'a, 'tcx>,
--    inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<ast::DefId>>>>>,
 +pub struct CoherenceChecker<'a, 'tcx: 'a> {
-+    pub crate_context: &'a CrateCtxt<'a, 'tcx>,
-+    pub inference_context: InferCtxt<'a, 'tcx>,
-+    pub inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<ast::DefId>>>>>,
- }
- 
- struct CoherenceCheckVisitor<'a, 'tcx: 'a> {
-@@ -109,7 +109,7 @@
+     crate_context: &'a CrateCtxt<'a, 'tcx>,
+     inference_context: InferCtxt<'a, 'tcx>,
+     inherent_impls: RefCell<DefIdMap<Rc<RefCell<Vec<DefId>>>>>,
+@@ -107,7 +107,7 @@
  }
  
  impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
@@ -39,16 +93,16 @@ diff -ru /usr/local/src/rust/src/librustc_typeck/coherence/mod.rs mytypeck/src/c
          // Check implementations and traits. This populates the tables
          // containing the inherent methods and extension methods. It also
          // builds up the trait inheritance table.
-Only in mytypeck/src: #lib.rs#
 diff -ru /usr/local/src/rust/src/librustc_typeck/lib.rs mytypeck/src/lib.rs
---- /usr/local/src/rust/src/librustc_typeck/lib.rs	2015-05-27 07:33:21.127222930 +0100
-+++ mytypeck/src/lib.rs	2015-05-27 13:42:25.741160019 +0100
+--- /usr/local/src/rust/src/librustc_typeck/lib.rs	2015-09-27 08:01:45.546617277 +0100
++++ mytypeck/src/lib.rs	2015-09-28 06:16:47.981570829 +0100
 @@ -64,7 +64,7 @@
  */
  // Do not remove on snapshot creation. Needed for bootstrap. (Issue #22364)
  #![cfg_attr(stage0, feature(custom_attribute))]
 -#![crate_name = "rustc_typeck"]
 +#![crate_name = "mytypeck"]
- #![unstable(feature = "rustc_private")]
+ #![unstable(feature = "rustc_private", issue = "27812")]
  #![staged_api]
  #![crate_type = "dylib"]
+Only in /usr/local/src/rust/src/librustc_typeck/: tmp

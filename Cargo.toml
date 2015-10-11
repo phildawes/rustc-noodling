@@ -12,6 +12,7 @@ time = "*"
 
 [profile.release]
 debug = true
+codegen-units=4
 
 [dependencies.mytypeck]
 path="mytypeck"

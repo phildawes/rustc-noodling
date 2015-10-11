@@ -167,6 +167,10 @@ pub fn run_type_inference() {
 
     ////////  Phase 1 + 2
     let krate = driver::phase_1_parse_input(&sess, krate_config, &input);
+    let t1 = time::precise_time_s();
+    println!("PHIL 0: parse input {:.3}s",t1-t0);
+    let t0 = time::precise_time_s();
+
     let krate = driver::phase_2_configure_and_expand(&sess, krate, "test", None)
                     .expect("phase 2 aborted");
     let t1 = time::precise_time_s();
@@ -205,8 +209,8 @@ pub fn run_type_inference() {
     let region_map = region::resolve_crate(&sess, krate);
 
     // PD: maybe don't need this
-    rustc::middle::check_loop::check_crate(&sess, krate);
-    rustc::middle::check_static_recursion::check_crate(&sess, krate, &def_map, &ast_map);
+    // rustc::middle::check_loop::check_crate(&sess, krate);
+    // rustc::middle::check_static_recursion::check_crate(&sess, krate, &def_map, &ast_map);
     let t1 = time::precise_time_s();
     println!("PHIL 0: pre-typeck complete {:.3}s",t1-t0);
 
@@ -241,8 +245,8 @@ pub fn run_type_inference() {
            println!("PHIL 2");
            coherence::check_coherence(&ccx);
 
-           println!("PHIL 3");
-           check::check_wf_old(&ccx);
+           //println!("PHIL 3");
+           //check::check_wf_old(&ccx);
 
            println!("PHIL 4");
            check::check_item_types(&ccx);

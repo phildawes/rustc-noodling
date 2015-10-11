@@ -51,7 +51,7 @@ fn handle_blob(src: &str, out: &mut String, prev: &mut usize,
         } else if let Some(_) = find_keyword(blob, "fn") {
 
             if start < byteoffset && end > byteoffset {
-                // need the code in this function. Don't strip it!
+                // we need the code in this function. Don't strip it!
                 continue;
             }
 
@@ -72,7 +72,7 @@ impl codemap::FileLoader for StrippedFileLoader {
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
-        println!("PHIL reading file: {:?}",path);
+        //println!("PHIL reading file: {:?}",path);
 
         let realpath;
         if path.to_str().unwrap() == self.fname {

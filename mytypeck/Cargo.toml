@@ -2,3 +2,8 @@
 name = "mytypeck"
 version = "0.0.1"
 authors = ["Phil Dawes <pdawes@drw.com>"]
+
+
+[profile.release]
+debug = true
+codegen-units=4
