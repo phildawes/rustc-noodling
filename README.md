@@ -2,7 +2,7 @@
 
 An attempt to get type information out of rustc as fast as possible
 
-Created by looking at rustc_driver/test.rs test_env() and recreating
+Created by looking at librustc_driver/test.rs test_env() and recreating
 
 
 Running: 

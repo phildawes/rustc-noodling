@@ -31,7 +31,7 @@ use syntax::diagnostic::Emitter;
 use rustc_driver::driver;
 use std::env;
 
-use rustc_front::lowering::lower_crate;
+use rustc_front::lowering::{lower_crate, LoweringContext};
 use rustc::front::map as hir_map;
 use mytypeck::middle::ty;
 use mytypeck::middle::lang_items;
@@ -108,9 +108,17 @@ pub fn run_type_inference() {
     let fname = if args.len() > 6 { &args[6] } else { tmpfname };
 
     println!("fname: {}, lo {:?}, hi {:?}", fname, lo, hi);
+
+    //println!("fname: {}, lo {:?}, hi {:?}", fname, lo, hi);
+
     let mut options = config::basic_options();
 
     let fpath = Path::new(&fname);
+
+    let target_blob = stripper::load_blob(fpath, 
+                                            (lo.0 as usize, lo.1 as usize)).unwrap();
+
+    //println!("PHIL: load_blob |{}|", target_blob);
 
     let mut rootfpath = fpath.to_path_buf();
 
@@ -179,7 +187,8 @@ pub fn run_type_inference() {
     let t0 = time::precise_time_s();
     ///////// Assign ids
     let krate = driver::assign_node_ids(&sess, krate);
-    let mut hir_forest = hir_map::Forest::new(lower_crate(&krate));
+    let lcx = LoweringContext::new(&sess, Some(&krate));
+    let mut hir_forest = hir_map::Forest::new(lower_crate(&lcx, &krate));
     let arenas = ty::CtxtArenas::new();
     let ast_map = driver::make_map(&sess, &mut hir_forest);
 
@@ -190,7 +199,7 @@ pub fn run_type_inference() {
 
     metadata::creader::LocalCrateReader::new(&sess, &ast_map).read_crates(krate);
 
-    let lang_items = lang_items::collect_language_items(krate, &sess);
+    let lang_items = lang_items::collect_language_items(&sess, &ast_map);
     let m = resolve::resolve_crate(&sess, &ast_map, resolve::MakeGlobMap::No);
 
     let resolve::CrateMap { def_map, freevars, trait_map, .. } = m;
@@ -214,7 +223,7 @@ pub fn run_type_inference() {
     let t1 = time::precise_time_s();
     println!("PHIL 0: pre-typeck complete {:.3}s",t1-t0);
 
-    ty::ctxt::create_and_enter(sess,
+    ty::ctxt::create_and_enter(&sess,
        &arenas,
        def_map,
        named_region_map,
@@ -285,7 +294,33 @@ pub fn run_type_inference() {
            print_expr_types(&tcx, krate, fname, lo, hi, visit.tables);
            let t1 = time::precise_time_s();
            println!("print types: {:.3}s",t1 - t0);
+
+
+           ///// Attempt to add a blob and analyse it
+
+           let target_blob = "impl foo {".to_owned() + &target_blob + "}";
+
+           let mut parser = string_to_parser(&tcx.sess.parse_sess, 
+                                             target_blob);
+           
+           let ffn = parser.parse_item().unwrap();
+
+           // println!("ffn is {:#?}",ffn);
+            
+
        });
+}
+
+use syntax::parse::parser::Parser;
+use syntax::parse::ParseSess;
+
+/// Map string to parser (via tts)
+pub fn string_to_parser<'a>(ps: &'a ParseSess, source_str: String) -> Parser<'a> {
+    use syntax::parse::new_parser_from_source_str;
+    new_parser_from_source_str(ps,
+                               Vec::new(),
+                               "bogofile".to_string(),
+                               source_str)
 }
 
 fn print_expr_types<'a, 'tcx>(tcx: &'a ty::ctxt<'tcx>, 

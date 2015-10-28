@@ -144,3 +144,44 @@ fn find_keyword(src: &str, pattern: &str)-> Option<usize> {
     }
     Some(start)
 }
+
+// Load just the function that the coordinates reference
+pub fn load_blob(path: &Path, coords: (usize, usize)) -> io::Result<String> {
+    let mut src = String::new();
+    try!(try!(::std::fs::File::open(path)).read_to_string(&mut src));    
+    match extract_blob(&src, 0, src.len(),
+                       coords_to_byteoffset(&src, coords.0, coords.1)) {
+        Some(n) => Ok(n.to_owned()),
+        None => Err(io::Error::new(io::ErrorKind::NotFound, "Couldn't find an blob of code matching the coordinates"))
+    }
+}
+
+
+fn extract_blob<'a>(src: &'a str, blockstart: usize, end: usize, 
+                    byteoffset: usize) -> Option<&'a str> {
+    
+    for (blobstart,blobend) in codeiter::iter_stmts(&src[blockstart..end]) {
+        let start = blobstart + blockstart;
+        let end = blobend + blockstart;
+
+        let blob = &src[start..end];
+
+        if blob.starts_with("impl") {
+            if let Some(bracepos) = blob.find("{") {
+                assert_eq!("}", &src[end-1..end]);
+                let a = extract_blob(src, start+bracepos+1, end-1, byteoffset);
+                if let Some(_) = a {
+                    return a;
+                }
+            }
+
+        } else if let Some(_) = find_keyword(blob, "fn") {
+            if start < byteoffset && end > byteoffset {
+                // we need the code in this function. Don't strip it!
+                return Some(&src[start..end]);
+            }
+        }
+    }
+    None
+}
+
